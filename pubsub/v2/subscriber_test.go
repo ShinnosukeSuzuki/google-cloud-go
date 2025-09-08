@@ -399,3 +399,200 @@ func mustCreateSubConfig(t *testing.T, c *Client, pbs *pb.Subscription) *Subscri
 	}
 	return c.Subscriber(pbs.Name)
 }
+
+func TestProcessReceiveSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings ReceiveSettings
+		expected receiveOptions
+	}{
+		{
+			name:     "all zero values - should use defaults",
+			settings: ReceiveSettings{},
+			expected: receiveOptions{
+				maxCount:      DefaultReceiveSettings.MaxOutstandingMessages,
+				maxBytes:      DefaultReceiveSettings.MaxOutstandingBytes,
+				maxExt:        DefaultReceiveSettings.MaxExtension,
+				maxExtPeriod:  DefaultReceiveSettings.MaxDurationPerAckExtension,
+				minExtPeriod:  DefaultReceiveSettings.MinDurationPerAckExtension,
+				numGoroutines: DefaultReceiveSettings.NumGoroutines,
+			},
+		},
+		{
+			name: "custom values - should use provided values",
+			settings: ReceiveSettings{
+				MaxOutstandingMessages:     100,
+				MaxOutstandingBytes:        1000000,
+				MaxExtension:               10 * time.Second,
+				MaxDurationPerAckExtension: 5 * time.Second,
+				MinDurationPerAckExtension: 1 * time.Second,
+				NumGoroutines:              5,
+			},
+			expected: receiveOptions{
+				maxCount:      100,
+				maxBytes:      1000000,
+				maxExt:        10 * time.Second,
+				maxExtPeriod:  5 * time.Second,
+				minExtPeriod:  1 * time.Second,
+				numGoroutines: 5,
+			},
+		},
+		{
+			name: "negative MaxExtension - should disable extension",
+			settings: ReceiveSettings{
+				MaxExtension: -1 * time.Second,
+			},
+			expected: receiveOptions{
+				maxCount:      DefaultReceiveSettings.MaxOutstandingMessages,
+				maxBytes:      DefaultReceiveSettings.MaxOutstandingBytes,
+				maxExt:        0,
+				maxExtPeriod:  DefaultReceiveSettings.MaxDurationPerAckExtension,
+				minExtPeriod:  DefaultReceiveSettings.MinDurationPerAckExtension,
+				numGoroutines: DefaultReceiveSettings.NumGoroutines,
+			},
+		},
+		{
+			name: "negative period values - should use defaults",
+			settings: ReceiveSettings{
+				MaxDurationPerAckExtension: -1 * time.Second,
+				MinDurationPerAckExtension: -1 * time.Second,
+			},
+			expected: receiveOptions{
+				maxCount:      DefaultReceiveSettings.MaxOutstandingMessages,
+				maxBytes:      DefaultReceiveSettings.MaxOutstandingBytes,
+				maxExt:        DefaultReceiveSettings.MaxExtension,
+				maxExtPeriod:  DefaultReceiveSettings.MaxDurationPerAckExtension,
+				minExtPeriod:  DefaultReceiveSettings.MinDurationPerAckExtension,
+				numGoroutines: DefaultReceiveSettings.NumGoroutines,
+			},
+		},
+		{
+			name: "zero NumGoroutines - should use default",
+			settings: ReceiveSettings{
+				NumGoroutines: 0,
+			},
+			expected: receiveOptions{
+				maxCount:      DefaultReceiveSettings.MaxOutstandingMessages,
+				maxBytes:      DefaultReceiveSettings.MaxOutstandingBytes,
+				maxExt:        DefaultReceiveSettings.MaxExtension,
+				maxExtPeriod:  DefaultReceiveSettings.MaxDurationPerAckExtension,
+				minExtPeriod:  DefaultReceiveSettings.MinDurationPerAckExtension,
+				numGoroutines: DefaultReceiveSettings.NumGoroutines,
+			},
+		},
+		{
+			name: "negative NumGoroutines - should use default",
+			settings: ReceiveSettings{
+				NumGoroutines: -5,
+			},
+			expected: receiveOptions{
+				maxCount:      DefaultReceiveSettings.MaxOutstandingMessages,
+				maxBytes:      DefaultReceiveSettings.MaxOutstandingBytes,
+				maxExt:        DefaultReceiveSettings.MaxExtension,
+				maxExtPeriod:  DefaultReceiveSettings.MaxDurationPerAckExtension,
+				minExtPeriod:  DefaultReceiveSettings.MinDurationPerAckExtension,
+				numGoroutines: DefaultReceiveSettings.NumGoroutines,
+			},
+		},
+		{
+			name: "negative MaxOutstandingMessages - should use as is",
+			settings: ReceiveSettings{
+				MaxOutstandingMessages: -1,
+			},
+			expected: receiveOptions{
+				maxCount:      -1,
+				maxBytes:      DefaultReceiveSettings.MaxOutstandingBytes,
+				maxExt:        DefaultReceiveSettings.MaxExtension,
+				maxExtPeriod:  DefaultReceiveSettings.MaxDurationPerAckExtension,
+				minExtPeriod:  DefaultReceiveSettings.MinDurationPerAckExtension,
+				numGoroutines: DefaultReceiveSettings.NumGoroutines,
+			},
+		},
+		{
+			name: "negative MaxOutstandingBytes - should use as is",
+			settings: ReceiveSettings{
+				MaxOutstandingBytes: -1,
+			},
+			expected: receiveOptions{
+				maxCount:      DefaultReceiveSettings.MaxOutstandingMessages,
+				maxBytes:      -1,
+				maxExt:        DefaultReceiveSettings.MaxExtension,
+				maxExtPeriod:  DefaultReceiveSettings.MaxDurationPerAckExtension,
+				minExtPeriod:  DefaultReceiveSettings.MinDurationPerAckExtension,
+				numGoroutines: DefaultReceiveSettings.NumGoroutines,
+			},
+		},
+		{
+			name: "zero MaxDurationPerAckExtension - should use as is",
+			settings: ReceiveSettings{
+				MaxDurationPerAckExtension: 0,
+			},
+			expected: receiveOptions{
+				maxCount:      DefaultReceiveSettings.MaxOutstandingMessages,
+				maxBytes:      DefaultReceiveSettings.MaxOutstandingBytes,
+				maxExt:        DefaultReceiveSettings.MaxExtension,
+				maxExtPeriod:  0,
+				minExtPeriod:  DefaultReceiveSettings.MinDurationPerAckExtension,
+				numGoroutines: DefaultReceiveSettings.NumGoroutines,
+			},
+		},
+		{
+			name: "zero MinDurationPerAckExtension - should use as is",
+			settings: ReceiveSettings{
+				MinDurationPerAckExtension: 0,
+			},
+			expected: receiveOptions{
+				maxCount:      DefaultReceiveSettings.MaxOutstandingMessages,
+				maxBytes:      DefaultReceiveSettings.MaxOutstandingBytes,
+				maxExt:        DefaultReceiveSettings.MaxExtension,
+				maxExtPeriod:  DefaultReceiveSettings.MaxDurationPerAckExtension,
+				minExtPeriod:  0,
+				numGoroutines: DefaultReceiveSettings.NumGoroutines,
+			},
+		},
+		{
+			name: "mixed positive and negative values",
+			settings: ReceiveSettings{
+				MaxOutstandingMessages:     500,
+				MaxOutstandingBytes:        -1,
+				MaxExtension:               -1 * time.Second,
+				MaxDurationPerAckExtension: 30 * time.Second,
+				MinDurationPerAckExtension: -1 * time.Second,
+				NumGoroutines:              3,
+			},
+			expected: receiveOptions{
+				maxCount:      500,
+				maxBytes:      -1,
+				maxExt:        0,
+				maxExtPeriod:  30 * time.Second,
+				minExtPeriod:  DefaultReceiveSettings.MinDurationPerAckExtension,
+				numGoroutines: 3,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := processReceiveSettings(tt.settings)
+
+			if result.maxCount != tt.expected.maxCount {
+				t.Errorf("maxCount: got %d, want %d", result.maxCount, tt.expected.maxCount)
+			}
+			if result.maxBytes != tt.expected.maxBytes {
+				t.Errorf("maxBytes: got %d, want %d", result.maxBytes, tt.expected.maxBytes)
+			}
+			if result.maxExt != tt.expected.maxExt {
+				t.Errorf("maxExt: got %v, want %v", result.maxExt, tt.expected.maxExt)
+			}
+			if result.maxExtPeriod != tt.expected.maxExtPeriod {
+				t.Errorf("maxExtPeriod: got %v, want %v", result.maxExtPeriod, tt.expected.maxExtPeriod)
+			}
+			if result.minExtPeriod != tt.expected.minExtPeriod {
+				t.Errorf("minExtPeriod: got %v, want %v", result.minExtPeriod, tt.expected.minExtPeriod)
+			}
+			if result.numGoroutines != tt.expected.numGoroutines {
+				t.Errorf("numGoroutines: got %d, want %d", result.numGoroutines, tt.expected.numGoroutines)
+			}
+		})
+	}
+}
