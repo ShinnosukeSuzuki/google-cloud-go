@@ -160,6 +160,71 @@ var DefaultReceiveSettings = ReceiveSettings{
 	NumGoroutines:              1,
 }
 
+// receiveOptions holds the processed receive settings.
+type receiveOptions struct {
+	maxCount      int
+	maxBytes      int
+	maxExt        time.Duration
+	maxExtPeriod  time.Duration
+	minExtPeriod  time.Duration
+	numGoroutines int
+}
+
+// processReceiveSettings validates and processes ReceiveSettings, applying defaults where necessary.
+// This function makes the settings processing logic testable by extracting it from the main Receive method.
+func processReceiveSettings(settings ReceiveSettings) receiveOptions {
+	// Process MaxOutstandingMessages
+	maxCount := settings.MaxOutstandingMessages
+	if maxCount == 0 {
+		maxCount = DefaultReceiveSettings.MaxOutstandingMessages
+	}
+
+	// Process MaxOutstandingBytes
+	maxBytes := settings.MaxOutstandingBytes
+	if maxBytes == 0 {
+		maxBytes = DefaultReceiveSettings.MaxOutstandingBytes
+	}
+
+	// Process MaxExtension
+	maxExt := settings.MaxExtension
+	if maxExt == 0 {
+		maxExt = DefaultReceiveSettings.MaxExtension
+	} else if maxExt < 0 {
+		// If MaxExtension is negative, disable automatic extension.
+		maxExt = 0
+	}
+
+	// Process MaxDurationPerAckExtension
+	maxExtPeriod := settings.MaxDurationPerAckExtension
+	if maxExtPeriod < 0 {
+		maxExtPeriod = DefaultReceiveSettings.MaxDurationPerAckExtension
+	}
+
+	// Process MinDurationPerAckExtension
+	minExtPeriod := settings.MinDurationPerAckExtension
+	if minExtPeriod < 0 {
+		minExtPeriod = DefaultReceiveSettings.MinDurationPerAckExtension
+	}
+
+	// Process NumGoroutines
+	var numGoroutines int
+	switch {
+	case settings.NumGoroutines >= 1:
+		numGoroutines = settings.NumGoroutines
+	default:
+		numGoroutines = DefaultReceiveSettings.NumGoroutines
+	}
+
+	return receiveOptions{
+		maxCount:      maxCount,
+		maxBytes:      maxBytes,
+		maxExt:        maxExt,
+		maxExtPeriod:  maxExtPeriod,
+		minExtPeriod:  minExtPeriod,
+		numGoroutines: numGoroutines,
+	}
+}
+
 var errReceiveInProgress = errors.New("pubsub: Receive already in progress for this subscriber")
 
 // Receive calls f with the outstanding messages from the subscription.
@@ -199,55 +264,25 @@ func (s *Subscriber) Receive(ctx context.Context, f func(context.Context, *Messa
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); s.receiveActive = false; s.mu.Unlock() }()
 
-	// TODO(hongalex): move settings check to a helper function to make it more testable
-	maxCount := s.ReceiveSettings.MaxOutstandingMessages
-	if maxCount == 0 {
-		maxCount = DefaultReceiveSettings.MaxOutstandingMessages
-	}
-	maxBytes := s.ReceiveSettings.MaxOutstandingBytes
-	if maxBytes == 0 {
-		maxBytes = DefaultReceiveSettings.MaxOutstandingBytes
-	}
-	maxExt := s.ReceiveSettings.MaxExtension
-	if maxExt == 0 {
-		maxExt = DefaultReceiveSettings.MaxExtension
-	} else if maxExt < 0 {
-		// If MaxExtension is negative, disable automatic extension.
-		maxExt = 0
-	}
-	maxExtPeriod := s.ReceiveSettings.MaxDurationPerAckExtension
-	if maxExtPeriod < 0 {
-		maxExtPeriod = DefaultReceiveSettings.MaxDurationPerAckExtension
-	}
-	minExtPeriod := s.ReceiveSettings.MinDurationPerAckExtension
-	if minExtPeriod < 0 {
-		minExtPeriod = DefaultReceiveSettings.MinDurationPerAckExtension
-	}
+	opts := processReceiveSettings(s.ReceiveSettings)
 
-	var numGoroutines int
-	switch {
-	case s.ReceiveSettings.NumGoroutines >= 1:
-		numGoroutines = s.ReceiveSettings.NumGoroutines
-	default:
-		numGoroutines = DefaultReceiveSettings.NumGoroutines
-	}
 	// TODO(jba): add tests that verify that ReceiveSettings are correctly processed.
 	po := &pullOptions{
-		maxExtension:           maxExt,
-		maxExtensionPeriod:     maxExtPeriod,
-		minExtensionPeriod:     minExtPeriod,
-		maxPrefetch:            trunc32(int64(maxCount)),
-		maxOutstandingMessages: maxCount,
-		maxOutstandingBytes:    maxBytes,
+		maxExtension:           opts.maxExt,
+		maxExtensionPeriod:     opts.maxExtPeriod,
+		minExtensionPeriod:     opts.minExtPeriod,
+		maxPrefetch:            trunc32(int64(opts.maxCount)),
+		maxOutstandingMessages: opts.maxCount,
+		maxOutstandingBytes:    opts.maxBytes,
 		clientID:               s.clientID,
 	}
 	fc := newSubscriberFlowController(FlowControlSettings{
-		MaxOutstandingMessages: maxCount,
-		MaxOutstandingBytes:    maxBytes,
+		MaxOutstandingMessages: opts.maxCount,
+		MaxOutstandingBytes:    opts.maxBytes,
 		LimitExceededBehavior:  FlowControlBlock,
 	})
 
-	sched := scheduler.NewReceiveScheduler(maxCount)
+	sched := scheduler.NewReceiveScheduler(opts.maxCount)
 
 	// Wait for all goroutines started by Receive to return, so instead of an
 	// obscure goroutine leak we have an obvious blocked call to Receive.
@@ -266,7 +301,7 @@ func (s *Subscriber) Receive(ctx context.Context, f func(context.Context, *Messa
 	ctx2, cancel2 := context.WithCancel(gctx)
 	defer cancel2()
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := 0; i < opts.numGoroutines; i++ {
 		// The iterator does not use the context passed to Receive. If it did,
 		// canceling that context would immediately stop the iterator without
 		// waiting for unacked messages.
